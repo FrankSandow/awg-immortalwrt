@@ -2,7 +2,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const core = require('@actions/core');
 
-const version = process.argv[2]; // Получение версии OpenWRT из аргумента командной строки
+const version = process.argv[2]; // Получение версии ImmortalWRT из аргумента командной строки
 const filterTargetsStr = process.argv[3] || ''; // Фильтр по targets (опционально, через запятую)
 const filterSubtargetsStr = process.argv[4] || ''; // Фильтр по subtargets (опционально, через запятую)
 
@@ -15,7 +15,7 @@ if (!version) {
   process.exit(1);
 }
 
-const url = `https://downloads.openwrt.org/releases/${version}/targets/`;
+const url = `https://downloads.immortalwrt.org/releases/${version}/targets/`;
 
 async function fetchHTML(url) {
   try {
