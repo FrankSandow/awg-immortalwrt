@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'OpenWRT version (e.g., 24.10.5)'
+        description: 'ImmortalWRT version (e.g., 24.10.5)'
         required: true
         type: string
       targets:
@@ -39,7 +39,7 @@ jobs:
         with:
           node-version: '20.16.0'
 
-      - name: Get OpenWRT version from inputs or tag
+      - name: Get ImmortalWRT version from inputs or tag
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "VERSION=${{ inputs.version }}" >> $GITHUB_ENV
@@ -86,29 +86,29 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y python3-pyelftools
 
-      - name: Cache OpenWrt SDK
+      - name: Cache ImmortalWrt SDK
         id: cache-sdk
         uses: actions/cache@v4
         env:
           cache-name: "cache-sdk-${{ matrix.build_env.tag }}-${{ matrix.build_env.target}}-${{ matrix.build_env.subtarget}}"
         with:
-          path: openwrt-sdk-*/
+          path: immortalwrt-sdk-*/
           key: ${{ runner.os }}-sdk-${{ env.cache-name }}
 
-      - name: Download and extract OpenWrt SDK
+      - name: Download and extract ImmortalWrt SDK
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
           echo "pkgarch: ${{ matrix.build_env.pkgarch}}, target:${{ matrix.build_env.target}}, subtarget: ${{ matrix.build_env.subtarget}}"
 
           # Get the actual SDK filename from the directory listing
-          SDK_FILE=$(curl -s "https://downloads.openwrt.org/releases/${{ matrix.build_env.tag }}/targets/${{ matrix.build_env.target}}/${{ matrix.build_env.subtarget}}/" | grep -o "openwrt-sdk-${{ matrix.build_env.tag }}-${{ matrix.build_env.target}}-${{ matrix.build_env.subtarget}}_gcc-[^\"]*_musl[^\"]*\.Linux-x86_64\.tar\.[xz|zst]*" | head -n1)
+          SDK_FILE=$(curl -s "https://downloads.immortalwrt.org/releases/${{ matrix.build_env.tag }}/targets/${{ matrix.build_env.target}}/${{ matrix.build_env.subtarget}}/" | grep -o "immortalwrt-sdk-${{ matrix.build_env.tag }}-${{ matrix.build_env.target}}-${{ matrix.build_env.subtarget}}_gcc-[^\"]*_musl[^\"]*\.Linux-x86_64\.tar\.[xz|zst]*" | head -n1)
           
           if [ -z "$SDK_FILE" ]; then
             echo "SDK file not found for ${{ matrix.build_env.tag }} ${{ matrix.build_env.target}} ${{ matrix.build_env.subtarget}}"
             exit 1
           fi
           
-          SDK_DOWNLOAD_URL="https://downloads.openwrt.org/releases/${{ matrix.build_env.tag }}/targets/${{ matrix.build_env.target}}/${{ matrix.build_env.subtarget}}/${SDK_FILE}"
+          SDK_DOWNLOAD_URL="https://downloads.immortalwrt.org/releases/${{ matrix.build_env.tag }}/targets/${{ matrix.build_env.target}}/${{ matrix.build_env.subtarget}}/${SDK_FILE}"
           echo "Downloading SDK: $SDK_DOWNLOAD_URL"
           
           wget "$SDK_DOWNLOAD_URL"
@@ -128,7 +128,7 @@ jobs:
       - name: Setup SDK and feeds
         run: |
           # Find SDK directory
-          SDK_DIR=$(find . -maxdepth 1 -name "openwrt-sdk-*" -type d | head -n1)
+          SDK_DIR=$(find . -maxdepth 1 -name "immortalwrt-sdk-*" -type d | head -n1)
           
           if [ -z "$SDK_DIR" ]; then
             echo "SDK directory not found"
@@ -160,7 +160,7 @@ jobs:
       - name: Build AmneziaWG packages
         run: |
           # Find SDK directory
-          SDK_DIR=$(find . -maxdepth 1 -name "openwrt-sdk-*" -type d | head -n1)
+          SDK_DIR=$(find . -maxdepth 1 -name "immortalwrt-sdk-*" -type d | head -n1)
           cd "$SDK_DIR"
 
           echo "Building AmneziaWG packages..."
@@ -186,7 +186,7 @@ jobs:
       - name: Prepare artifacts
         run: |
           # Find SDK directory
-          SDK_DIR=$(find . -maxdepth 1 -name "openwrt-sdk-*" -type d | head -n1)
+          SDK_DIR=$(find . -maxdepth 1 -name "immortalwrt-sdk-*" -type d | head -n1)
           
           mkdir -p awgrelease
           postfix="v${{ matrix.build_env.tag }}_${{ matrix.build_env.pkgarch}}_${{ matrix.build_env.target}}_${{ matrix.build_env.subtarget}}"
