@@ -1,4 +1,4 @@
-![Downloads](https://img.shields.io/github/downloads/Slava-Shchipunov/awg-openwrt/total)
+![Downloads](https://img.shields.io/github/downloads/Slava-Shchipunov/awg-openwrt/total.svg)
 
 # Пакеты amneziawg для роутеров с прошивкой OpenWRT
 
@@ -10,8 +10,11 @@
 ```
 sh <(wget -O - https://raw.githubusercontent.com/Slava-Shchipunov/awg-openwrt/refs/heads/master/amneziawg-install.sh)
 ```
-
-3) Кроме того для автоматической настройки также можно использовать [скрипт](https://github.com/itdoginfo/domain-routing-openwrt) от пользователя [@itdoginfo](https://github.com/itdoginfo). Этот скрипт позволяет автоматически скачать нужные пакеты из собранных здесь и настроить [точечный обход блокировок по доменам](https://habr.com/ru/articles/767464/). Подойдёт, если у вас слабый роутер с недостаточным объёмом ROM для установки podkop-a и зависимостей
+3) Также предусмотрен неинтерактивный режим простой установки пакетов (без вопросов о настройке интерфейса с протоколом AmneziaWG и установке пакета `luci-i18n-amneziawg-ru`):
+```
+sh <(wget -O - https://raw.githubusercontent.com/Slava-Shchipunov/awg-openwrt/refs/heads/master/amneziawg-install.sh) -en
+```  
+4) Кроме того для автоматической настройки также можно использовать [скрипт](https://github.com/itdoginfo/domain-routing-openwrt) от пользователя [@itdoginfo](https://github.com/itdoginfo). Этот скрипт позволяет автоматически скачать нужные пакеты из собранных здесь и настроить [точечный обход блокировок по доменам](https://habr.com/ru/articles/767464/). Подойдёт, если у вас слабый роутер с недостаточным объёмом ROM для установки podkop-a и зависимостей
 
 ## Сборка пакетов для всех устройств, поддерживающих OpenWRT
 В репозиторий добавлен скрипт, который парсит данные о поддерживаемых платформах со страницы OpenWRT и автоматически запускает сборку пакетов AmneziaWG для всех устройств.
@@ -33,6 +36,7 @@ sh <(wget -O - https://raw.githubusercontent.com/Slava-Shchipunov/awg-openwrt/re
 15) AWG-2.0 [25.12.0](https://github.com/Slava-Shchipunov/awg-openwrt/releases/tag/v25.12.0)
 16) AWG-2.0 [25.12.1](https://github.com/Slava-Shchipunov/awg-openwrt/releases/tag/v25.12.1)
 17) AWG-2.0 [25.12.2](https://github.com/Slava-Shchipunov/awg-openwrt/releases/tag/v25.12.2)
+18) AWG-2.0 [25.12.3](https://github.com/Slava-Shchipunov/awg-openwrt/releases/tag/v25.12.3)
 
 Также запускал сборку для версии [22.03.7](https://github.com/Slava-Shchipunov/awg-openwrt/releases/tag/v22.03.7), но там для двух платформ сборка завершилась ошибкой. Так как это достаточно старая версия OpenWRT, я не стал разбираться, в чем проблема.
 
@@ -80,8 +84,11 @@ To run the script, connect to the router via SSH, enter the command and follow t
 ```
 sh <(wget -O - https://raw.githubusercontent.com/Slava-Shchipunov/awg-openwrt/refs/heads/master/amneziawg-install.sh)
 ```
-
-3) In addition, for automatic configuration you can also use the [script](https://github.com/itdoginfo/domain-routing-openwrt) from user [@itdoginfo](https://github.com/itdoginfo). This script allows you to automatically download the necessary packages from those collected here and configure [point-by-point bypass of blocking by domains](https://habr.com/ru/articles/767464/) (instructions in Russian). Suitable if you have a weak router with insufficient ROM to install podkop and its dependencies
+3) There is also a non-interactive mode for simple package installation (without questions about configuring an interface with the AmneziaWG protocol and installing the `luci-i18n-amneziawg-ru` package):
+```
+sh <(wget -O - https://raw.githubusercontent.com/Slava-Shchipunov/awg-openwrt/refs/heads/master/amneziawg-install.sh) -en
+```
+4) In addition, for automatic configuration you can also use the [script](https://github.com/itdoginfo/domain-routing-openwrt) from user [@itdoginfo](https://github.com/itdoginfo). This script allows you to automatically download the necessary packages from those collected here and configure [point-by-point bypass of blocking by domains](https://habr.com/ru/articles/767464/) (instructions in Russian). Suitable if you have a weak router with insufficient ROM to install podkop and its dependencies
 
 # Building packages for all devices that support OpenWRT
 A script has been added to the repository that parses data on supported platforms from the OpenWRT page and automatically starts building AmneziaWG packages for all devices.
@@ -103,6 +110,7 @@ At the moment I have collected packages for all devices for OpenWRT versions:
 15) AWG-2.0 [25.12.0](https://github.com/Slava-Shchipunov/awg-openwrt/releases/tag/v25.12.0)
 16) AWG-2.0 [25.12.1](https://github.com/Slava-Shchipunov/awg-openwrt/releases/tag/v25.12.1)
 17) AWG-2.0 [25.12.2](https://github.com/Slava-Shchipunov/awg-openwrt/releases/tag/v25.12.2)
+18) AWG-2.0 [25.12.3](https://github.com/Slava-Shchipunov/awg-openwrt/releases/tag/v25.12.3)
 
 I also ran the build for version [22.03.7](https://github.com/Slava-Shchipunov/awg-openwrt/releases/tag/v22.03.7), but the build ended with an error for two platforms. Since this is a fairly old version of OpenWRT, I did not bother to figure out what the problem was.
 
