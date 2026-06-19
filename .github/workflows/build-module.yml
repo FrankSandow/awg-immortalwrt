@@ -274,6 +274,8 @@ jobs:
           # Initialize minimal git repo so luci.mk version detection works
           cd package/luci-proto-amneziawg
           git init -q
+          git config user.email "build@github.actions"
+          git config user.name "Build"
           git add -A
           git commit -q -m "v$(sed -n 's/^PKG_VERSION:=//p' Makefile)"
           git tag "v$(sed -n 's/^PKG_VERSION:=//p' Makefile)"
