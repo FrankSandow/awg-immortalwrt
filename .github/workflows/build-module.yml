@@ -268,11 +268,23 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
+          # Initialize git in luci feed so i18n sub-packages get correct version
+          LUCI_PROTO_VER=$(sed -n 's/^PKG_VERSION:=//p' "$WORKSPACE_DIR/luci-proto-amneziawg/Makefile")
+          cd feeds/luci
+          git init -q
+          git config user.email "build@github.actions"
+          git config user.name "Build"
+          git add -A
+          git commit -q -m "v$LUCI_PROTO_VER"
+          git tag "v$LUCI_PROTO_VER"
+          cd "$SDK_DIR"
+
           cp -r "$WORKSPACE_DIR/kmod-amneziawg" package/
           cp -r "$WORKSPACE_DIR/amneziawg-tools" package/
           cp -r "$WORKSPACE_DIR/luci-proto-amneziawg" package/
+
           
-          # Initialize minimal git repo so luci.mk version detection works
+          # Initialize git in proto package dir so luci.mk version detection works
           cd package/luci-proto-amneziawg
           git init -q
           git config user.email "build@github.actions"
@@ -337,11 +349,12 @@ jobs:
           TOOLS_POSTFIX="_${TOOLS_VER}_v${IWRT_VER}_${PKGARCH}_${TARGET}_${SUBTARGET}"
           find "$SDK_DIR/bin/packages" -name "amneziawg-tools*.?pk" -exec sh -c 'file="$1"; postfix="$2"; ext="${file##*.}"; cp "$file" "awgrelease/amneziawg-tools${postfix}.${ext}"' _ {} "${TOOLS_POSTFIX}" \; || echo "amneziawg-tools package not found"
 
-          # luci-proto-amneziawg (static version)
-          find "$SDK_DIR/bin/packages" -name "luci-proto-amneziawg*.?pk" -exec cp {} awgrelease/ \; || echo "luci-proto-amneziawg package not found"
+          # luci-proto-amneziawg
+          LUCI_POSTFIX="_$(sed -n 's/^PKG_VERSION:=//p' luci-proto-amneziawg/Makefile)_v${IWRT_VER}_${PKGARCH}_${TARGET}_${SUBTARGET}"
+          find "$SDK_DIR/bin/packages" -name "luci-proto-amneziawg*.?pk" -exec sh -c 'file="$1"; postfix="$2"; ext="${file##*.}"; cp "$file" "awgrelease/luci-proto-amneziawg${postfix}.${ext}"' _ {} "${LUCI_POSTFIX}" \; || echo "luci-proto-amneziawg package not found"
 
-          # luci-i18n-amneziawg-ru (static version)
-          find "$SDK_DIR/bin/packages" -name "luci-i18n-amneziawg-ru*.?pk" -exec cp {} awgrelease/ \; || echo "luci-i18n-amneziawg-ru package not found"
+          # luci-i18n-amneziawg-ru
+          find "$SDK_DIR/bin/packages" -name "luci-i18n-amneziawg-ru*.?pk" -exec sh -c 'file="$1"; postfix="$2"; ext="${file##*.}"; cp "$file" "awgrelease/luci-i18n-amneziawg-ru${postfix}.${ext}"' _ {} "${LUCI_POSTFIX}" \; || echo "luci-i18n-amneziawg-ru package not found"
 
           echo "Built packages:"
           ls -la awgrelease/

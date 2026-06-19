@@ -35,7 +35,7 @@ jobs:
     timeout-minutes: 1440  # 24 hours — sequential builds take time
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Resolve upstream and trigger builds
         env:
