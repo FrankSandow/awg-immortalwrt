@@ -270,6 +270,14 @@ jobs:
           cp -r "$WORKSPACE_DIR/kmod-amneziawg" package/
           cp -r "$WORKSPACE_DIR/amneziawg-tools" package/
           cp -r "$WORKSPACE_DIR/luci-proto-amneziawg" package/
+          
+          # Initialize minimal git repo so luci.mk version detection works
+          cd package/luci-proto-amneziawg
+          git init -q
+          git add -A
+          git commit -q -m "v$(sed -n 's/^PKG_VERSION:=//p' Makefile)"
+          git tag "v$(sed -n 's/^PKG_VERSION:=//p' Makefile)"
+          cd "$SDK_DIR"
 
           # Inject versions via sed placeholder substitution
           sed -i "s/__AWG_KMOD_VERSION__/${{ needs.resolve-versions.outputs.kmod-version }}/" package/kmod-amneziawg/Makefile
