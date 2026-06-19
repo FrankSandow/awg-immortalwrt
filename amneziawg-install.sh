@@ -2,15 +2,22 @@
 
 #set -x
 
+REPO_OWNER="FrankSandow"
+REPO_NAME="awg-immortalwrt"
+API_BASE="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}"
+RELEASE_BASE="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download"
+
 PKG_MANAGER=""
 PKG_EXT=""
+RELEASE_TAG=""
 
 usage() {
     cat <<EOF
-Usage: ${0##*/} [-h] [-e] [-n]
-    -h    show this help
-    -e    do not install 'luci-i18n-amneziawg-ru' package
-    -n    do not configure the amneziawg interface
+Usage: ${0##*/} [-h] [-e] [-n] [-t TAG]
+    -h       show this help
+    -e       do not install 'luci-i18n-amneziawg-ru' package
+    -n       do not configure the amneziawg interface
+    -t TAG   use specific release tag (auto-detect if omitted)
 EOF
     exit 0
 }
@@ -82,38 +89,82 @@ get_pkgarch() {
     uname -m
 }
 
+# Query GitHub API to find the latest release for this IWRT version.
+# Release tags follow the format: {tools_ver}-v{iwrt_ver}
+#   or: {tools_ver}_kmod{...}-v{iwrt_ver}
+# Both end with -v{IWRT_VER}.
+detect_release_tag() {
+    local iwrt_ver="$1"
+    local page=1
+    local all_tags=""
+
+    # Paginate through releases (GitHub returns 100 per page max)
+    while true; do
+        local tags_page
+        tags_page=$(curl -sL "${API_BASE}/releases?per_page=100&page=${page}" \
+            | grep '"tag_name"' \
+            | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"//;s/".*//')
+
+        if [ -z "$tags_page" ]; then
+            break
+        fi
+
+        all_tags="${all_tags}${tags_page}
+"
+        page=$((page + 1))
+    done
+
+    # Find the first (newest) tag ending with -v{IWRT_VER}
+    echo "$all_tags" | while IFS= read -r tag; do
+        case "$tag" in
+            *"-v${iwrt_ver}") echo "$tag"; return 0 ;;
+        esac
+    done
+}
+
+# Get asset names for a given release tag
+get_release_assets() {
+    local tag="$1"
+    curl -sL "${API_BASE}/releases/tags/${tag}" \
+        | grep '"name"' \
+        | sed 's/.*"name"[[:space:]]*:[[:space:]]*"//;s/".*//'
+}
+
+# Find an asset matching: {prefix}_{anything}_{PKGARCH}_{TARGET}_{SUBTARGET}.{ext}
+# Falls back to the other package extension if preferred not found.
 download_package() {
-    pkg_base_name="$1"
-    pkg_postfix_base="$2"
-    awg_dir="$3"
-    base_url="$4"
+    local prefix="$1"
+    local assets="$2"
+    local awg_dir="$3"
+    local tag="$4"
 
-    preferred_file="${pkg_base_name}${pkg_postfix_base}.${PKG_EXT}"
-    preferred_url="${base_url}${preferred_file}"
-    if wget -q -O "$awg_dir/$preferred_file" "$preferred_url" && [ -s "$awg_dir/$preferred_file" ]; then
-        echo "$preferred_file"
-        return 0
-    fi
-    rm -f "$awg_dir/$preferred_file"
+    local match_suffix="_${PKGARCH}_${TARGET}_${SUBTARGET}."
 
-    if [ "$PKG_EXT" = "apk" ]; then
-        fallback_ext="ipk"
-    else
-        fallback_ext="apk"
+    # Try preferred extension first, then fallback
+    local ext_try="$PKG_EXT"
+    local ext_other="ipk"
+    if [ "$ext_try" = "ipk" ]; then
+        ext_other="apk"
     fi
 
-    fallback_file="${pkg_base_name}${pkg_postfix_base}.${fallback_ext}"
-    fallback_url="${base_url}${fallback_file}"
-    if wget -q -O "$awg_dir/$fallback_file" "$fallback_url" && [ -s "$awg_dir/$fallback_file" ]; then
-        echo "$fallback_file"
-        return 0
-    fi
-    rm -f "$awg_dir/$fallback_file"
+    for ext in "$ext_try" "$ext_other"; do
+        local filename
+        filename=$(echo "$assets" | grep "^${prefix}.*${match_suffix}${ext}$" | head -1)
+        if [ -n "$filename" ]; then
+            local url="${RELEASE_BASE}/${tag}/${filename}"
+            printf "  Downloading %s\n" "$filename" >&2
+            if wget -q -O "$awg_dir/$filename" "$url" && [ -s "$awg_dir/$filename" ]; then
+                echo "$filename"
+                return 0
+            fi
+            rm -f "$awg_dir/$filename"
+        fi
+    done
 
     return 1
 }
 
-#Репозиторий OpenWRT должен быть доступен для установки зависимостей пакета kmod-amneziawg
+#OpenWRT repository must be available for installing kmod-amneziawg dependencies
 check_repo() {
     printf "\033[32;1mChecking OpenWrt repo availability...\033[0m\n"
     if [ "$PKG_MANAGER" = "apk" ]; then
@@ -126,103 +177,107 @@ check_repo() {
 }
 
 install_awg_packages() {
-    # Получение pkgarch с наибольшим приоритетом
     PKGARCH=$(get_pkgarch)
-
     TARGET=$(ubus call system board | jsonfilter -e '@.release.target' | cut -d '/' -f 1)
     SUBTARGET=$(ubus call system board | jsonfilter -e '@.release.target' | cut -d '/' -f 2)
-    VERSION=$(ubus call system board | jsonfilter -e '@.release.version')
-    PKGPOSTFIX_BASE="_v${VERSION}_${PKGARCH}_${TARGET}_${SUBTARGET}"
-    BASE_URL="https://github.com/Slava-Shchipunov/awg-openwrt/releases/download/"
+    IWRT_VER=$(ubus call system board | jsonfilter -e '@.release.version')
 
-    # Определяем версию AWG протокола (2.0 для OpenWRT >= 23.05.6 и >= 24.10.3)
-    AWG_VERSION="1.0"
-    MAJOR_VERSION=$(echo "$VERSION" | cut -d '.' -f 1)
-    MINOR_VERSION=$(echo "$VERSION" | cut -d '.' -f 2)
-    PATCH_VERSION=$(echo "$VERSION" | cut -d '.' -f 3)
+    printf "\033[32;1mDetected system:\033[0m\n"
+    printf "  ImmortalWRT: %s\n" "$IWRT_VER"
+    printf "  Target:      %s/%s\n" "$TARGET" "$SUBTARGET"
+    printf "  PkgArch:     %s\n" "$PKGARCH"
+    printf "  PkgManager:  %s\n" "$PKG_MANAGER"
 
-    if [ "$MAJOR_VERSION" -gt 24 ] || \
-       [ "$MAJOR_VERSION" -eq 24 -a "$MINOR_VERSION" -gt 10 ] || \
-       [ "$MAJOR_VERSION" -eq 24 -a "$MINOR_VERSION" -eq 10 -a "$PATCH_VERSION" -ge 3 ] || \
-       [ "$MAJOR_VERSION" -eq 23 -a "$MINOR_VERSION" -eq 5 -a "$PATCH_VERSION" -ge 6 ]; then
-        AWG_VERSION="2.0"
-        LUCI_PACKAGE_NAME="luci-proto-amneziawg"
-    else
-        LUCI_PACKAGE_NAME="luci-app-amneziawg"
+    # Resolve release tag
+    if [ -z "$RELEASE_TAG" ]; then
+        printf "\033[32;1mAuto-detecting release for ImmortalWRT %s...\033[0m\n" "$IWRT_VER"
+        RELEASE_TAG=$(detect_release_tag "$IWRT_VER")
     fi
 
-    printf "\033[32;1mDetected AWG version: $AWG_VERSION\033[0m\n"
+    if [ -z "$RELEASE_TAG" ]; then
+        echo "Error: No release found for ImmortalWRT $IWRT_VER"
+        echo "Available releases can be browsed at:"
+        echo "  https://github.com/${REPO_OWNER}/${REPO_NAME}/releases"
+        exit 1
+    fi
+
+    printf "\033[32;1mRelease tag: %s\033[0m\n" "$RELEASE_TAG"
+
+    # Fetch asset list for this release
+    printf "\033[32;1mFetching release assets...\033[0m\n"
+    ASSETS=$(get_release_assets "$RELEASE_TAG")
+    if [ -z "$ASSETS" ]; then
+        echo "Error: Could not fetch assets for release $RELEASE_TAG"
+        exit 1
+    fi
 
     AWG_DIR="/tmp/amneziawg"
     mkdir -p "$AWG_DIR"
 
+    # --- kmod-amneziawg ---
     if is_pkg_installed "kmod-amneziawg"; then
         echo "kmod-amneziawg already installed"
     else
-        KMOD_AMNEZIAWG_FILENAME=$(download_package "kmod-amneziawg" "$PKGPOSTFIX_BASE" "$AWG_DIR" "${BASE_URL}v${VERSION}/")
+        KMOD_FILE=$(download_package "kmod-amneziawg" "$ASSETS" "$AWG_DIR" "$RELEASE_TAG")
         if [ $? -eq 0 ]; then
-            echo "kmod-amneziawg file downloaded successfully"
+            printf "  kmod-amneziawg downloaded successfully\n" >&2
+            install_local_pkg "$AWG_DIR/$KMOD_FILE"
+            if [ $? -eq 0 ]; then
+                echo "kmod-amneziawg installed successfully"
+            else
+                echo "Error installing kmod-amneziawg. Please install it manually and run the script again"
+                exit 1
+            fi
         else
-            echo "Error downloading kmod-amneziawg. Please, install kmod-amneziawg manually and run the script again"
-            exit 1
-        fi
-
-        install_local_pkg "$AWG_DIR/$KMOD_AMNEZIAWG_FILENAME"
-
-        if [ $? -eq 0 ]; then
-            echo "kmod-amneziawg installed successfully"
-        else
-            echo "Error installing kmod-amneziawg. Please, install kmod-amneziawg manually and run the script again"
+            echo "Error downloading kmod-amneziawg for your platform."
+            echo "Check available assets at: https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/tag/${RELEASE_TAG}"
             exit 1
         fi
     fi
 
+    # --- amneziawg-tools ---
     if is_pkg_installed "amneziawg-tools"; then
         echo "amneziawg-tools already installed"
     else
-        AMNEZIAWG_TOOLS_FILENAME=$(download_package "amneziawg-tools" "$PKGPOSTFIX_BASE" "$AWG_DIR" "${BASE_URL}v${VERSION}/")
+        TOOLS_FILE=$(download_package "amneziawg-tools" "$ASSETS" "$AWG_DIR" "$RELEASE_TAG")
         if [ $? -eq 0 ]; then
-            echo "amneziawg-tools file downloaded successfully"
+            printf "  amneziawg-tools downloaded successfully\n" >&2
+            install_local_pkg "$AWG_DIR/$TOOLS_FILE"
+            if [ $? -eq 0 ]; then
+                echo "amneziawg-tools installed successfully"
+            else
+                echo "Error installing amneziawg-tools. Please install it manually and run the script again"
+                exit 1
+            fi
         else
-            echo "Error downloading amneziawg-tools. Please, install amneziawg-tools manually and run the script again"
-            exit 1
-        fi
-
-        install_local_pkg "$AWG_DIR/$AMNEZIAWG_TOOLS_FILENAME"
-
-        if [ $? -eq 0 ]; then
-            echo "amneziawg-tools installed successfully"
-        else
-            echo "Error installing amneziawg-tools. Please, install amneziawg-tools manually and run the script again"
+            echo "Error downloading amneziawg-tools for your platform."
             exit 1
         fi
     fi
 
-    # Проверяем оба возможных названия пакета
-    if is_pkg_installed "luci-proto-amneziawg" || is_pkg_installed "luci-app-amneziawg"; then
-        echo "$LUCI_PACKAGE_NAME already installed"
+    # --- luci-proto-amneziawg ---
+    if is_pkg_installed "luci-proto-amneziawg"; then
+        echo "luci-proto-amneziawg already installed"
     else
-        LUCI_AMNEZIAWG_FILENAME=$(download_package "$LUCI_PACKAGE_NAME" "$PKGPOSTFIX_BASE" "$AWG_DIR" "${BASE_URL}v${VERSION}/")
+        LUCI_FILE=$(download_package "luci-proto-amneziawg" "$ASSETS" "$AWG_DIR" "$RELEASE_TAG")
         if [ $? -eq 0 ]; then
-            echo "$LUCI_PACKAGE_NAME file downloaded successfully"
+            printf "  luci-proto-amneziawg downloaded successfully\n" >&2
+            install_local_pkg "$AWG_DIR/$LUCI_FILE"
+            if [ $? -eq 0 ]; then
+                echo "luci-proto-amneziawg installed successfully"
+            else
+                echo "Error installing luci-proto-amneziawg. Please install it manually and run the script again"
+                exit 1
+            fi
         else
-            echo "Error downloading $LUCI_PACKAGE_NAME. Please, install $LUCI_PACKAGE_NAME manually and run the script again"
-            exit 1
-        fi
-
-        install_local_pkg "$AWG_DIR/$LUCI_AMNEZIAWG_FILENAME"
-
-        if [ $? -eq 0 ]; then
-            echo "$LUCI_PACKAGE_NAME installed successfully"
-        else
-            echo "Error installing $LUCI_PACKAGE_NAME. Please, install $LUCI_PACKAGE_NAME manually and run the script again"
+            echo "Error downloading luci-proto-amneziawg for your platform."
             exit 1
         fi
     fi
 
-    # Устанавливаем русскую локализацию только для AWG 2.0
-    if [ "$AWG_VERSION" = "2.0" ] && [ $ASK_FOR_TRANSLATION = 1 ]; then
-        printf "\033[32;1mУстанавливаем пакет с русской локализацией? Install Russian language pack? (y/n) [n]: \033[0m\n"
+    # --- luci-i18n-amneziawg-ru (optional) ---
+    if [ $ASK_FOR_TRANSLATION = 1 ]; then
+        printf "\033[32;1mInstall Russian language pack? (y/n) [n]: \033[0m\n"
         read INSTALL_RU_LANG
         INSTALL_RU_LANG=${INSTALL_RU_LANG:-n}
 
@@ -230,17 +285,17 @@ install_awg_packages() {
             if is_pkg_installed "luci-i18n-amneziawg-ru"; then
                 echo "luci-i18n-amneziawg-ru already installed"
             else
-                LUCI_I18N_AMNEZIAWG_RU_FILENAME=$(download_package "luci-i18n-amneziawg-ru" "$PKGPOSTFIX_BASE" "$AWG_DIR" "${BASE_URL}v${VERSION}/")
+                I18N_FILE=$(download_package "luci-i18n-amneziawg-ru" "$ASSETS" "$AWG_DIR" "$RELEASE_TAG")
                 if [ $? -eq 0 ]; then
-                    echo "luci-i18n-amneziawg-ru file downloaded successfully"
-                    install_local_pkg "$AWG_DIR/$LUCI_I18N_AMNEZIAWG_RU_FILENAME"
+                    printf "  luci-i18n-amneziawg-ru downloaded successfully\n" >&2
+                    install_local_pkg "$AWG_DIR/$I18N_FILE"
                     if [ $? -eq 0 ]; then
                         echo "luci-i18n-amneziawg-ru installed successfully"
                     else
                         echo "Warning: Error installing luci-i18n-amneziawg-ru (non-critical)"
                     fi
                 else
-                    echo "Warning: Russian localization not available for this version/platform (non-critical)"
+                    echo "Warning: Russian localization not available for this platform (non-critical)"
                 fi
             fi
         else
@@ -288,16 +343,13 @@ configure_amneziawg_interface() {
     read -r -p "Enter H3 value (from [Interface]):"$'\n' AWG_H3
     read -r -p "Enter H4 value (from [Interface]):"$'\n' AWG_H4
 
-    # AWG 2.0 новые параметры
-    if [ "$AWG_VERSION" = "2.0" ]; then
-        read -r -p "Enter S3 value (from [Interface]) [optional, leave blank to skip]:"$'\n' AWG_S3
-        read -r -p "Enter S4 value (from [Interface]) [optional, leave blank to skip]:"$'\n' AWG_S4
-        read -r -p "Enter I1 value (from [Interface]) [optional, leave blank to skip]:"$'\n' AWG_I1
-        read -r -p "Enter I2 value (from [Interface]) [optional, leave blank to skip]:"$'\n' AWG_I2
-        read -r -p "Enter I3 value (from [Interface]) [optional, leave blank to skip]:"$'\n' AWG_I3
-        read -r -p "Enter I4 value (from [Interface]) [optional, leave blank to skip]:"$'\n' AWG_I4
-        read -r -p "Enter I5 value (from [Interface]) [optional, leave blank to skip]:"$'\n' AWG_I5
-    fi
+    read -r -p "Enter S3 value (from [Interface]) [optional, leave blank to skip]:"$'\n' AWG_S3
+    read -r -p "Enter S4 value (from [Interface]) [optional, leave blank to skip]:"$'\n' AWG_S4
+    read -r -p "Enter I1 value (from [Interface]) [optional, leave blank to skip]:"$'\n' AWG_I1
+    read -r -p "Enter I2 value (from [Interface]) [optional, leave blank to skip]:"$'\n' AWG_I2
+    read -r -p "Enter I3 value (from [Interface]) [optional, leave blank to skip]:"$'\n' AWG_I3
+    read -r -p "Enter I4 value (from [Interface]) [optional, leave blank to skip]:"$'\n' AWG_I4
+    read -r -p "Enter I5 value (from [Interface]) [optional, leave blank to skip]:"$'\n' AWG_I5
 
     uci set network.${INTERFACE_NAME}=interface
     uci set network.${INTERFACE_NAME}.proto=$PROTO
@@ -315,16 +367,13 @@ configure_amneziawg_interface() {
     uci set network.${INTERFACE_NAME}.awg_h3=$AWG_H3
     uci set network.${INTERFACE_NAME}.awg_h4=$AWG_H4
 
-    # Устанавливаем новые параметры для AWG 2.0 (только если они заданы)
-    if [ "$AWG_VERSION" = "2.0" ]; then
-        [ -n "$AWG_S3" ] && uci set network.${INTERFACE_NAME}.awg_s3=$AWG_S3
-        [ -n "$AWG_S4" ] && uci set network.${INTERFACE_NAME}.awg_s4=$AWG_S4
-        [ -n "$AWG_I1" ] && uci set network.${INTERFACE_NAME}.awg_i1=$AWG_I1
-        [ -n "$AWG_I2" ] && uci set network.${INTERFACE_NAME}.awg_i2=$AWG_I2
-        [ -n "$AWG_I3" ] && uci set network.${INTERFACE_NAME}.awg_i3=$AWG_I3
-        [ -n "$AWG_I4" ] && uci set network.${INTERFACE_NAME}.awg_i4=$AWG_I4
-        [ -n "$AWG_I5" ] && uci set network.${INTERFACE_NAME}.awg_i5=$AWG_I5
-    fi
+    [ -n "$AWG_S3" ] && uci set network.${INTERFACE_NAME}.awg_s3=$AWG_S3
+    [ -n "$AWG_S4" ] && uci set network.${INTERFACE_NAME}.awg_s4=$AWG_S4
+    [ -n "$AWG_I1" ] && uci set network.${INTERFACE_NAME}.awg_i1=$AWG_I1
+    [ -n "$AWG_I2" ] && uci set network.${INTERFACE_NAME}.awg_i2=$AWG_I2
+    [ -n "$AWG_I3" ] && uci set network.${INTERFACE_NAME}.awg_i3=$AWG_I3
+    [ -n "$AWG_I4" ] && uci set network.${INTERFACE_NAME}.awg_i4=$AWG_I4
+    [ -n "$AWG_I5" ] && uci set network.${INTERFACE_NAME}.awg_i5=$AWG_I5
 
     if ! uci show network | grep -q ${CONFIG_NAME}; then
         uci add network ${CONFIG_NAME}
@@ -373,11 +422,12 @@ configure_amneziawg_interface() {
 ASK_FOR_TRANSLATION=1
 ASK_FOR_INTERFACE_CONFIG=1
 
-while getopts ":ehn" opt; do
+while getopts ":ehnt:" opt; do
     case "$opt" in
         h) usage ;;
         e) ASK_FOR_TRANSLATION=0 ;;
         n) ASK_FOR_INTERFACE_CONFIG=0 ;;
+        t) RELEASE_TAG="$OPTARG" ;;
         \?) echo "Unknown option -$OPTARG" >&2; usage ;;
     esac
 done

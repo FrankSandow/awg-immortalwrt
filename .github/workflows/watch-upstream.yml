@@ -1,0 +1,306 @@
+name: Watch Upstream
+
+on:
+  schedule:
+    # Daily at 04:00 UTC
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Version selection mode'
+        required: true
+        type: choice
+        options:
+          - latest
+          - pin
+          - from
+        default: latest
+      iwrt_count:
+        description: 'Number of latest IWRT versions to build (for "latest" mode)'
+        required: false
+        type: string
+        default: '2'
+      iwrt_version:
+        description: 'IWRT version, e.g. 24.10.6 (for "pin" and "from" modes)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1440  # 24 hours — sequential builds take time
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Resolve upstream and trigger builds
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # ================================================================
+          # Configuration
+          # ================================================================
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            MODE="latest"
+            IWRT_COUNT="2"
+          else
+            MODE="${{ inputs.mode }}"
+            IWRT_COUNT="${{ inputs.iwrt_count }}"
+          fi
+          PIN_VERSION="${{ inputs.iwrt_version }}"
+          FROM_VERSION="${{ inputs.iwrt_version }}"
+
+          KMOD_REPO="https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git"
+          TOOLS_REPO="https://github.com/amnezia-vpn/amneziawg-tools.git"
+          IWRT_REPO="https://github.com/immortalwrt/immortalwrt.git"
+
+          FAILED_BUILDS=""
+
+          # ================================================================
+          # Helper: get latest AWG tag with proper -N suffix handling
+          #
+          # AmneziaWG uses tags like v1.0.20260329 and v1.0.20260329-2
+          # where -N is a PATCH revision (newer), NOT a pre-release.
+          # Standard semver would treat -2 as pre-release (older).
+          # We use custom sorting: primary = date, secondary = patch number.
+          # ================================================================
+          get_latest_awg_tag() {
+            local repo="$1"
+            git ls-remote --tags "$repo" \
+              | awk -F'\t' '{print $2}' \
+              | sed 's|refs/tags/||' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]{8}(-[0-9]+)?$' \
+              | awk '{
+                  tag = $0
+                  sub(/^v/, "", tag)
+                  # Extract 8-digit date (YYYYMMDD)
+                  if (match(tag, /([0-9]{8})/, d)) {
+                    date = d[1]
+                  } else {
+                    next
+                  }
+                  # Extract optional -N patch suffix (higher = newer)
+                  if (match(tag, /-([0-9]+)$/, p)) {
+                    patch = p[1] + 0
+                  } else {
+                    patch = 0
+                  }
+                  printf "%s %03d %s\n", date, patch, $0
+                }' \
+              | sort -k1,1 -k2,2n \
+              | tail -1 \
+              | awk '{print $3}'
+          }
+
+          # ================================================================
+          # Step 1: Resolve latest AmneziaWG versions
+          # ================================================================
+          echo "### Resolving latest AmneziaWG versions" >&2
+
+          KMOD_TAG=$(get_latest_awg_tag "$KMOD_REPO")
+          if [ -z "$KMOD_TAG" ]; then
+            echo "::error::No valid kmod tags found in $KMOD_REPO"
+            exit 1
+          fi
+          echo "Latest kmod tag: $KMOD_TAG"
+
+          TOOLS_TAG=$(get_latest_awg_tag "$TOOLS_REPO")
+          if [ -z "$TOOLS_TAG" ]; then
+            echo "::error::No valid tools tags found in $TOOLS_REPO"
+            exit 1
+          fi
+          echo "Latest tools tag: $TOOLS_TAG"
+
+          # Extract base versions (strip v prefix and -N suffix)
+          KMOD_TAG_NO_V=$(echo "$KMOD_TAG" | sed 's/^v//')
+          KMOD_VER=$(echo "$KMOD_TAG_NO_V" | sed 's/-[0-9]*$//')
+          TOOLS_TAG_NO_V=$(echo "$TOOLS_TAG" | sed 's/^v//')
+          TOOLS_VER=$(echo "$TOOLS_TAG_NO_V" | sed 's/-[0-9]*$//')
+
+          echo "  kmod: tag=$KMOD_TAG  version=$KMOD_VER"
+          echo "  tools: tag=$TOOLS_TAG  version=$TOOLS_VER"
+
+          # ================================================================
+          # Step 2: Get ImmortalWRT versions
+          # ================================================================
+          echo "### Resolving ImmortalWRT versions (mode=$MODE)" >&2
+
+          # Fetch all release tags (stable + RC), sorted newest-first
+          IWRT_ALL=$(
+            git ls-remote --tags "$IWRT_REPO" \
+              | awk -F'\t' '{print $2}' \
+              | sed 's|refs/tags/||' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$' \
+              | sed 's/^v//' \
+              | sort -Vr
+          )
+
+          if [ -z "$IWRT_ALL" ]; then
+            echo "::error::No ImmortalWRT release tags found"
+            exit 1
+          fi
+
+          IWRT_COUNT_TOTAL=$(echo "$IWRT_ALL" | wc -l)
+          echo "Found $IWRT_COUNT_TOTAL ImmortalWRT releases"
+
+          # Apply mode filter — result is always oldest-first for ordered building
+          case "$MODE" in
+            latest)
+              if ! echo "$IWRT_COUNT" | grep -qE '^[0-9]+$'; then
+                echo "::error::iwrt_count must be a positive integer, got '$IWRT_COUNT'"
+                exit 1
+              fi
+              # Take N newest, then reverse to oldest-first
+              IWRT_VERSIONS=$(echo "$IWRT_ALL" | head -n "$IWRT_COUNT" | tac)
+              echo "Building for latest $IWRT_COUNT versions:"
+              ;;
+            pin)
+              if [ -z "$PIN_VERSION" ]; then
+                echo "::error::iwrt_version is required for pin mode"
+                exit 1
+              fi
+              if ! echo "$IWRT_ALL" | grep -qx "$PIN_VERSION"; then
+                echo "::error::Version $PIN_VERSION not found in ImmortalWRT releases"
+                echo "Available versions:" >&2
+                echo "$IWRT_ALL" | head -20 >&2
+                exit 1
+              fi
+              IWRT_VERSIONS="$PIN_VERSION"
+              echo "Building for pinned version: $PIN_VERSION"
+              ;;
+            from)
+              if [ -z "$FROM_VERSION" ]; then
+                echo "::error::iwrt_version is required for from mode"
+                exit 1
+              fi
+              # From the newest-first sorted list, take all versions >= FROM_VERSION
+              # then reverse to oldest-first for ordered building.
+              # Use numeric component comparison to handle versions like 24.9.x vs 24.10.x
+              IWRT_VERSIONS=$(
+                echo "$IWRT_ALL" | awk -F. -v min="$FROM_VERSION" '
+                  BEGIN { split(min, m, "."); }
+                  {
+                    # Strip -rcN suffix for version comparison
+                    ver = $0;
+                    rc_suffix = "";
+                    if (match(ver, /-rc[0-9]+$/, rc_arr)) {
+                      rc_suffix = rc_arr[0];
+                      sub(/-rc[0-9]+$/, "", ver);
+                    }
+                    split(ver, v, ".");
+                    if (length(v) < 3) next;
+
+                    # Numeric comparison on each component
+                    ge = 0;
+                    if (v[1]+0 > m[1]+0) ge = 1;
+                    else if (v[1]+0 == m[1]+0) {
+                      if (v[2]+0 > m[2]+0) ge = 1;
+                      else if (v[2]+0 == m[2]+0) {
+                        if (v[3]+0 >= m[3]+0) ge = 1;
+                      }
+                    }
+                    if (ge) print $0;
+                    else exit;  # sorted newest-first, so we can stop here
+                  }
+                ' | tac
+              )
+              if [ -z "$IWRT_VERSIONS" ]; then
+                echo "::error::No ImmortalWRT versions found >= $FROM_VERSION"
+                exit 1
+              fi
+              echo "Building all versions from $FROM_VERSION:"
+              ;;
+            *)
+              echo "::error::Unknown mode: $MODE"
+              exit 1
+              ;;
+          esac
+
+          echo "$IWRT_VERSIONS" | while read -r ver; do
+            echo "  - $ver"
+          done
+
+          # ================================================================
+          # Step 3: For each IWRT version, check dedup and trigger build
+          #
+          # We trigger from OLDEST to NEWEST so that the newest IWRT
+          # release is created last and appears first in the GitHub
+          # releases list (most recently created = first).
+          # ================================================================
+          echo ""
+          echo "### Checking releases and triggering builds" >&2
+          echo ""
+
+          BUILD_COUNT=0
+
+          while IFS= read -r IWRT_VER; do
+            [ -z "$IWRT_VER" ] && continue
+
+            # Compute release tag (must match build-module.yml logic exactly)
+            RELEASE_TAG="${TOOLS_VER}-v${IWRT_VER}"
+            if [ "$KMOD_TAG_NO_V" != "$TOOLS_VER" ]; then
+              RELEASE_TAG="${TOOLS_VER}_kmod${KMOD_TAG_NO_V}-v${IWRT_VER}"
+            fi
+
+            # Dedup: skip if release already exists
+            if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+              echo "SKIP: Release '$RELEASE_TAG' already exists"
+              continue
+            fi
+
+            echo "BUILD: Triggering build for IWRT $IWRT_VER (release: $RELEASE_TAG)"
+            BUILD_COUNT=$((BUILD_COUNT + 1))
+
+            # Trigger build-module workflow
+            gh workflow run "build-module.yml" \
+              -f awg_kmod_tag="$KMOD_TAG" \
+              -f awg_tools_tag="$TOOLS_TAG" \
+              -f iwrt_version="$IWRT_VER"
+
+            # Wait for the workflow run to be registered
+            sleep 15
+
+            # Get the run ID of the workflow we just triggered
+            RUN_ID=$(gh run list --workflow="build-module.yml" --limit=1 \
+              --json databaseId,status,conclusion \
+              --jq '.[0].databaseId')
+
+            if [ -z "$RUN_ID" ]; then
+              echo "::warning::Could not find run ID for IWRT $IWRT_VER"
+              FAILED_BUILDS="$FAILED_BUILDS $IWRT_VER(no-run-id)"
+              continue
+            fi
+
+            echo "  Run ID: $RUN_ID — waiting for completion..."
+
+            # Wait for the build to complete (this blocks until done)
+            gh run watch "$RUN_ID" 2>&1 || true
+
+            # Check the build conclusion
+            CONCLUSION=$(gh run view "$RUN_ID" --json conclusion --jq '.conclusion')
+            if [ "$CONCLUSION" = "success" ]; then
+              echo "  Build SUCCEEDED for IWRT $IWRT_VER"
+            else
+              echo "::warning::Build FAILED for IWRT $IWRT_VER (conclusion: $CONCLUSION)"
+              FAILED_BUILDS="$FAILED_BUILDS $IWRT_VER"
+            fi
+
+            echo ""
+
+          done <<< "$IWRT_VERSIONS"
+
+          # ================================================================
+          # Summary
+          # ================================================================
+          echo "### Summary" >&2
+          echo "Total builds triggered: $BUILD_COUNT"
+          if [ -n "$FAILED_BUILDS" ]; then
+            echo "::error::Failed builds for:$FAILED_BUILDS"
+            exit 1
+          else
+            echo "All builds completed successfully"
+          fi
