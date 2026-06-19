@@ -268,14 +268,9 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-          # Initialize git in luci feed so i18n sub-packages get correct version
+          # Tag luci feed so i18n sub-packages get correct version
           LUCI_PROTO_VER=$(sed -n 's/^PKG_VERSION:=//p' "$WORKSPACE_DIR/luci-proto-amneziawg/Makefile")
           cd feeds/luci
-          git init -q
-          git config user.email "build@github.actions"
-          git config user.name "Build"
-          git add -A
-          git commit -q -m "v$LUCI_PROTO_VER"
           git tag "v$LUCI_PROTO_VER"
           cd "$SDK_DIR"
 
