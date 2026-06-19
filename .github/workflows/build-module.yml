@@ -271,7 +271,7 @@ jobs:
           # Tag luci feed so i18n sub-packages get correct version
           LUCI_PROTO_VER=$(sed -n 's/^PKG_VERSION:=//p' "$WORKSPACE_DIR/luci-proto-amneziawg/Makefile")
           cd feeds/luci
-          git tag "v$LUCI_PROTO_VER"
+          git tag "v$LUCI_PROTO_VER" 2>/dev/null || true
           cd "$SDK_DIR"
 
           cp -r "$WORKSPACE_DIR/kmod-amneziawg" package/
