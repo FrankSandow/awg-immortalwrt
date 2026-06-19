@@ -55,7 +55,7 @@ jobs:
       release-body: ${{ steps.resolve.outputs.release-body }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Resolve versions
         id: resolve
@@ -178,12 +178,12 @@ jobs:
       job-config: ${{ steps.generate-config.outputs.job-config }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: '20.16.0'
+          node-version: '24'
 
       - name: Install dependencies
         run: npm install
@@ -208,7 +208,7 @@ jobs:
 
     steps:
       - name: Checkout AWG source code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Python dependencies
         run: |
@@ -217,7 +217,7 @@ jobs:
 
       - name: Cache ImmortalWrt SDK
         id: cache-sdk
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         env:
           cache-name: "cache-sdk-${{ matrix.build_env.tag }}-${{ matrix.build_env.target }}-${{ matrix.build_env.subtarget }}"
         with:
@@ -255,6 +255,7 @@ jobs:
       - name: Setup SDK, inject versions, and configure feeds
         run: |
           SDK_DIR=$(find . -maxdepth 1 -name "immortalwrt-sdk-*" -type d | head -n1)
+          SDK_DIR=$(realpath "$SDK_DIR")
 
           if [ -z "$SDK_DIR" ]; then
             echo "SDK directory not found"
